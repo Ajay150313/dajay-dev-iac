@@ -1,47 +1,62 @@
-resource "aws_ecs_cluster" "my-app-cluster" {
-  name = "myapp-cluster"
+resource "aws_ecs_cluster" "web-cluster" {
+  name               = "dajay-services-cluster"
+  capacity_providers = [aws_ecs_capacity_provider.test.name]
+  tags = {
+    "env"       = "dev"
+    }
 }
 
-data "template_file" "myapp" {
-  template = file(".//templates//image//image.json")
+resource "aws_ecs_capacity_provider" "test" {
+  name = aws_autoscaling_group.asg.name
+  auto_scaling_group_provider {
+    auto_scaling_group_arn         = aws_autoscaling_group.asg.arn
+    managed_termination_protection = "ENABLED"
 
-  vars = {
-    app_image      = var.app_image
-    app_port       = var.app_port
-    fargate_cpu    = var.fargate_cpu
-    fargate_memory = var.fargate_memory
-    aws_region     = var.AWS_REGION
+    managed_scaling {
+      status          = "ENABLED"
+      target_capacity = 85
+    }
+  }
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
-resource "aws_ecs_task_definition" "test-def" {
-  family                   = "myapp-task"
-  execution_role_arn       = "${aws_iam_role.ecs_task_execution_role.arn}"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = var.fargate_cpu
-  memory                   = var.fargate_memory
-  container_definitions    = data.template_file.myapp.rendered
+# update file container-def, so it's pulling image from ecr
+resource "aws_ecs_task_definition" "task-definition-test" {
+  family                = "web-family"
+  container_definitions = file("templates/image/image.json")
+  network_mode          = "bridge"
+  tags = {
+    "env"       = "dev"
+    }
 }
 
-resource "aws_ecs_service" "my-service" {
-  name            = "myapp-service"
-  cluster         = aws_ecs_cluster.my-app-cluster.id
-  task_definition = aws_ecs_task_definition.test-def.arn
-  desired_count   = var.app_count
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    security_groups  = "${[aws_security_group.ecs_sg.id]}"
-    subnets          = "${[aws_subnet.dajay-dev-private-subnet-1.id, aws_subnet.dajay-dev-private-subnet-2.id]}"
-    assign_public_ip = true
+resource "aws_ecs_service" "service" {
+  name            = "web-service"
+  cluster         = aws_ecs_cluster.web-cluster.id
+  task_definition = aws_ecs_task_definition.task-definition-test.arn
+  desired_count   = 10
+  ordered_placement_strategy {
+    type  = "binpack"
+    field = "cpu"
   }
-
   load_balancer {
-    target_group_arn = aws_alb_target_group.myapp-tg.arn
-    container_name   = "myapp"
-    container_port   = var.app_port
+    target_group_arn = aws_lb_target_group.lb_target_group.arn
+    container_name   = "web-app"
+    container_port   = 80
   }
+  # Optional: Allow external changes without Terraform plan difference(for example ASG)
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+  launch_type = "EC2"
+  depends_on  = [aws_lb_listener.web-listener]
+}
 
-  depends_on = [aws_alb_listener.myapp, aws_iam_role_policy_attachment.ecs_task_execution_role]
+resource "aws_cloudwatch_log_group" "log_group" {
+  name = "/ecs/web-container"
+  tags = {
+    "env"       = "dev"
+    }
 }

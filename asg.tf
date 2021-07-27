@@ -1,27 +1,55 @@
-resource "aws_appautoscaling_target" "ecs_target" {
-  max_capacity       = 4
-  min_capacity       = 2
-  resource_id        = "service/${aws_ecs_cluster.my-app-cluster.name}/${aws_ecs_service.my-service.name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["amzn-ami*amazon-ecs-optimized"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+  owners = ["amazon", "self"]
 }
 
-#Automatically scale capacity up by one
-resource "aws_appautoscaling_policy" "ecs_policy_up" {
-  name               = "scale-down"
-  policy_type        = "StepScaling"
-  resource_id        = "service/${aws_ecs_cluster.my-app-cluster.name}/${aws_ecs_service.my-service.name}"
-  scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
+resource "aws_launch_configuration" "web-dev-lc" {
+  image_id      = data.aws_ami.amazon_linux.id
+  instance_type = "t2.micro"
+  lifecycle {
+    create_before_destroy = true
+  }
+  iam_instance_profile        = aws_iam_instance_profile.ecs_service_role.name
+  key_name                    = "my-key"
+  security_groups             = [aws_security_group.ec2-sg.id]
+  associate_public_ip_address = true
+  user_data                   = <<EOF
+#! /bin/bash
+sudo apt-get update
+sudo echo "ECS_CLUSTER=${var.cluster_name}" >> /etc/ecs/ecs.config
+sudo yum install -y httpd
+sudo systemctl start httpd
+EOF
+}
 
-  step_scaling_policy_configuration {
-    adjustment_type         = "ChangeInCapacity"
-    cooldown                = 60
-    metric_aggregation_type = "Maximum"
+resource "aws_autoscaling_group" "asg" {
+  name                      = "web-app-asg"
+  launch_configuration      = aws_launch_configuration.web-dev-lc.name
+  min_size                  = 2
+  max_size                  = 3
+  desired_capacity          = 2
+  health_check_type         = "ELB"
+  health_check_grace_period = 300
+  vpc_zone_identifier       = [aws_subnet.dajay-dev-public-subnet-1.id, aws_subnet.dajay-dev-public-subnet-2.id]
 
-    step_adjustment {
-      metric_interval_upper_bound = 0
-      scaling_adjustment          = -1
-    }
+  target_group_arns     = [aws_lb_target_group.lb_target_group.arn]
+  protect_from_scale_in = true
+  lifecycle {
+    create_before_destroy = true
   }
 }

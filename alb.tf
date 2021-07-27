@@ -1,34 +1,57 @@
-resource "aws_alb" "alb" {
-  name           = "customer-app-load-balancer"
-  subnets        = "${[aws_subnet.dajay-dev-public-subnet-1.id, aws_subnet.dajay-dev-public-subnet-2.id]}"
-  security_groups = "${[aws_security_group.alb-sg.id]}"
+resource "aws_lb" "web-app-lb" {
+  name               = "web-app-ecs-lb"
+  load_balancer_type = "application"
+  internal           = false
+  subnets            = [aws_subnet.dajay-dev-public-subnet-1.id, aws_subnet.dajay-dev-public-subnet-2.id]
+  tags = {
+    "env"       = "dev"
+   }
+  security_groups = [aws_security_group.lb.id]
 }
 
-resource "aws_alb_target_group" "myapp-tg" {
-  name        = "myapp-tg"
-  port        = 80
-  protocol    = "HTTP"
-  target_type = "ip"
-  vpc_id = "${aws_vpc.dajay-dev-vpc.id}"
+resource "aws_security_group" "lb" {
+  name   = "allow-all-lb"
+  vpc_id = aws_vpc.dajay-dev-vpc.id
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
+  tags = {
+    "env"       = "dev"
+   }
+}
+
+resource "aws_lb_target_group" "lb_target_group" {
+  name        = "web-target-group"
+  port        = "80"
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = aws_vpc.dajay-dev-vpc.id
   health_check {
+    path                = "/"
     healthy_threshold   = 2
-    unhealthy_threshold = 2
-    timeout             = 3
-    protocol            = "HTTP"
-    matcher             = "200"
-    path                = var.health_check_path
-    interval            = 30
+    unhealthy_threshold = 10
+    timeout             = 60
+    interval            = 300
+    matcher             = "200,301,302"
   }
 }
 
-#redirecting all incomming traffic from ALB to the target group
-resource "aws_alb_listener" "myapp" {
-  load_balancer_arn = "${aws_alb.alb.id}"
-  port              = var.app_port
+resource "aws_lb_listener" "web-listener" {
+  load_balancer_arn = aws_lb.web-app-lb.arn
+  port              = "80"
   protocol          = "HTTP"
   default_action {
     type             = "forward"
-    target_group_arn = "${aws_alb_target_group.myapp-tg.arn}"
+    target_group_arn = aws_lb_target_group.lb_target_group.arn
   }
 }
