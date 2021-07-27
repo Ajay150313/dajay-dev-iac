@@ -48,7 +48,7 @@ resource "aws_autoscaling_group" "asg" {
   vpc_zone_identifier       = [aws_subnet.dajay-dev-public-subnet-1.id, aws_subnet.dajay-dev-public-subnet-2.id]
 
   target_group_arns     = [aws_lb_target_group.lb_target_group.arn]
-  protect_from_scale_in = true
+  protect_from_scale_in = false
   lifecycle {
     create_before_destroy = true
   }
